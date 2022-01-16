@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using TacoLib.GameInteract;
 using WindowsInput;
 using WindowsInput.Events;
+using WindowsInput.Events.Sources;
 
 namespace WebSocketServerNetFramework.Clients
 {
@@ -19,6 +20,7 @@ namespace WebSocketServerNetFramework.Clients
 
     public class ControlClient : BaseClient, ISocketClient
     {
+
         [DllImport("User32.dll")]
         static extern int SetForegroundWindow(IntPtr point);
 
@@ -31,7 +33,39 @@ namespace WebSocketServerNetFramework.Clients
             Simulate.Events().ClickChord(mkeys).Invoke();
         }
 
-        public ControlClient(int socketId, WebSocket socket) : base(socketId, socket) { }
+        public ControlClient(int socketId, WebSocket socket) : base(socketId, socket) 
+        {
+        }
+
+        private void RegisterListeners()
+        {
+            Gw2WebSocketServer.InputHook.ButtonDown += OnButtonDown;
+            Gw2WebSocketServer.InputHook.ButtonUp += OnButtonUp;
+            Gw2WebSocketServer.InputHook.ButtonClick += InputHook_ButtonClick;
+        }
+
+        private void UnregisterListeners()
+        {
+            Gw2WebSocketServer.InputHook.ButtonDown -= OnButtonDown;
+            Gw2WebSocketServer.InputHook.ButtonUp -= OnButtonUp;
+            Gw2WebSocketServer.InputHook.ButtonClick -= InputHook_ButtonClick;
+        }
+
+        private void InputHook_ButtonClick(object sender, EventSourceEventArgs<ButtonClick> e)
+        {
+            
+            SendJson(new Command { Type="mouseclick", Data= e.Data.Button.ToString()}).Wait();
+        }
+
+        public void OnButtonDown(object sender, EventSourceEventArgs<ButtonDown> e)
+        {
+            Console.WriteLine("ButtonDown");
+        }
+
+        public void OnButtonUp(object sender, EventSourceEventArgs<ButtonUp> e)
+        {
+            Console.WriteLine("ButtonUp");
+        }
 
         public void HandleIncomingData(ArraySegment<byte> buffer, WebSocketReceiveResult receiveResult)
         {
@@ -50,6 +84,7 @@ namespace WebSocketServerNetFramework.Clients
 
         public async Task SendLoopAsync()
         {
+            RegisterListeners();
             bool state = false;
             bool nstate = false;
             var cancellationToken = SendLoopTokenSource.Token;
@@ -59,7 +94,7 @@ namespace WebSocketServerNetFramework.Clients
                 {
                     while (webSocket.State == WebSocketState.Open)
                     {
-                        await Task.Delay(500);
+                        await Task.Delay(100);
                         var process = GameInstance.GetGameProcess();
                         nstate = process != null && !process.HasExited;
                         if (nstate != state)
@@ -78,6 +113,7 @@ namespace WebSocketServerNetFramework.Clients
                     Log.Error(ex, "An error happened when running the web socket");
                 }
             }
+            UnregisterListeners();
         }
     }
 }

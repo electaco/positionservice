@@ -7,6 +7,8 @@ using System.Net.WebSockets;
 using System.Threading;
 using System.Threading.Tasks;
 using WebSocketServerNetFramework.Clients;
+using WindowsInput;
+using WindowsInput.Events.Sources;
 
 // From https://github.com/MV10/WebSocketExample/blob/master/WebSocketWithBroadcasts/
 
@@ -23,11 +25,18 @@ namespace WebSocketServerNetFramework
 
         private static bool ServerIsRunning = true;
 
+        public static IMouseEventSource InputHook;
         // The key is a socket id
         private static ConcurrentDictionary<int, ISocketClient> Clients = new ConcurrentDictionary<int, ISocketClient>();
 
         public static void Start(string uriPrefix)
         {
+            if (InputHook == null)
+            {
+                Console.WriteLine("Doing hooks");
+                InputHook = Capture.Global.MouseAsync();
+            }
+
             SocketLoopTokenSource = new CancellationTokenSource();
             ListenerLoopTokenSource = new CancellationTokenSource();
             Listener = new HttpListener();
@@ -95,7 +104,7 @@ namespace WebSocketServerNetFramework
                                     client = new ControlClient(socketId, wsContext.WebSocket);
 
                                 Clients.TryAdd(socketId, client);
-                                Console.WriteLine($"Socket {socketId}: New connection.");
+                                Console.WriteLine($"Socket {socketId}: New connection for {context.Request.Url.LocalPath }");
                                 _ = Task.Run(() => SocketProcessingLoopAsync(client).ConfigureAwait(false));
                             }
                             catch (Exception)

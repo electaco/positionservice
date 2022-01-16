@@ -1,9 +1,6 @@
-﻿using Newtonsoft.Json;
-using Serilog;
+﻿using Serilog;
 using System;
 using System.Net.WebSockets;
-using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using TacoLib.Gw2MumbleLib;
 
