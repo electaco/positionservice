@@ -55,6 +55,7 @@ namespace WebSocketServerNetFramework.Clients
         {
             
             SendJson(new Command { Type="mouseclick", Data= e.Data.Button.ToString()}).Wait();
+            Console.WriteLine("Mouse click detected");
         }
 
         public void OnButtonDown(object sender, EventSourceEventArgs<ButtonDown> e)
