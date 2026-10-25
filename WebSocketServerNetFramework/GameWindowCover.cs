@@ -8,15 +8,45 @@ using System.Text;
 namespace WebSocketServerNetFramework
 {
     /// <summary>
-    /// Tells whether other programs' windows cover part of the game window, so the overlay can hide
-    /// instead of drawing over e.g. a browser that sits in front of the game.
+    /// Reports which parts of the game's client area other programs' windows cover, so the overlay
+    /// can cut those parts out and look like it sits behind e.g. a browser in front of the game.
     /// Only read-only Win32 queries; never sends input to any window.
     /// </summary>
     public class GameWindowCover
     {
-        // Covered when other windows overlap at least this fraction of the game's client area.
-        // Small enough to catch a narrow window, large enough to ignore a stray edge or shadow.
-        private const double CoverFraction = 0.01;
+        // Overlaps thinner than this in either direction are shadows or stray edges.
+        private const int MinRectSize = 2;
+        // More rectangles than this is unusual; the smallest ones are merged into one bounding box
+        // (which can cut a little too much, but never too little).
+        private const int MaxRects = 32;
+
+        /// <summary>The game client size in physical pixels and the rectangles covering it, relative to its top-left.</summary>
+        public class State
+        {
+            public int Width;
+            public int Height;
+            public bool Minimized;
+            public List<int[]> Rects = new List<int[]>();
+
+            public bool SameAs(State other)
+            {
+                if (other == null || Width != other.Width || Height != other.Height || Minimized != other.Minimized || Rects.Count != other.Rects.Count)
+                {
+                    return false;
+                }
+                for (var i = 0; i < Rects.Count; i++)
+                {
+                    for (var j = 0; j < 4; j++)
+                    {
+                        if (Rects[i][j] != other.Rects[i][j])
+                        {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
 
         // Windows owned by these processes are our own overlay (Electron) and never count.
         private static readonly string[] OwnExecutables = { "electron.exe", "electaco.exe" };
@@ -33,8 +63,8 @@ namespace WebSocketServerNetFramework
         private uint gamePid;
         private DateTime lastErrorLog = DateTime.MinValue;
 
-        /// <summary>True when the game window is minimized or other windows overlap it.</summary>
-        public bool IsCovered(uint processId)
+        /// <summary>The current cover state; an empty one (nothing covering) when it can't be determined.</summary>
+        public State Query(uint processId)
         {
             try
             {
@@ -47,15 +77,16 @@ namespace WebSocketServerNetFramework
                     lastErrorLog = DateTime.UtcNow;
                     Log.Error(e, "Could not determine whether the game window is covered");
                 }
-                return false;
+                return new State();
             }
         }
 
-        private bool Check(uint processId)
+        private State Check(uint processId)
         {
+            var state = new State();
             if (processId == 0)
             {
-                return false;
+                return state;
             }
             if (processId != gamePid || gameWindow == IntPtr.Zero || !NativeMethods.IsWindow(gameWindow))
             {
@@ -64,19 +95,20 @@ namespace WebSocketServerNetFramework
             }
             if (gameWindow == IntPtr.Zero)
             {
-                return false;
+                return state;
             }
             // Nothing visible to draw over.
             if (NativeMethods.IsIconic(gameWindow))
             {
-                return true;
+                state.Minimized = true;
+                return state;
             }
 
             NativeMethods.RECT client;
             var origin = new NativeMethods.POINT();
             if (!NativeMethods.GetClientRect(gameWindow, out client) || !NativeMethods.ClientToScreen(gameWindow, ref origin))
             {
-                return false;
+                return state;
             }
             var game = new NativeMethods.RECT
             {
@@ -85,50 +117,67 @@ namespace WebSocketServerNetFramework
                 Right = origin.X + client.Right,
                 Bottom = origin.Y + client.Bottom,
             };
-            var gameArea = (long)(game.Right - game.Left) * (game.Bottom - game.Top);
-            if (gameArea <= 0)
+            state.Width = game.Right - game.Left;
+            state.Height = game.Bottom - game.Top;
+            if (state.Width <= 0 || state.Height <= 0)
             {
-                return false;
+                return state;
             }
 
-            long covered = 0;
-            var limit = (long)Math.Ceiling(gameArea * CoverFraction);
             var hwnd = NativeMethods.GetWindow(gameWindow, NativeMethods.GW_HWNDPREV);
             // Bounded in case the z-order changes under us.
             for (var i = 0; hwnd != IntPtr.Zero && i < 2000; i++, hwnd = NativeMethods.GetWindow(hwnd, NativeMethods.GW_HWNDPREV))
             {
-                covered += Overlap(hwnd, game);
-                if (covered >= limit)
+                int[] rect;
+                if (Overlap(hwnd, game, out rect))
                 {
-                    return true;
+                    state.Rects.Add(rect);
                 }
             }
-            return false;
+            if (state.Rects.Count > MaxRects)
+            {
+                // Keep the largest, merge the rest into their bounding box.
+                state.Rects.Sort((a, b) => ((long)b[2] * b[3]).CompareTo((long)a[2] * a[3]));
+                var rest = state.Rects.GetRange(MaxRects - 1, state.Rects.Count - (MaxRects - 1));
+                state.Rects.RemoveRange(MaxRects - 1, rest.Count);
+                int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue;
+                foreach (var r in rest)
+                {
+                    x0 = Math.Min(x0, r[0]);
+                    y0 = Math.Min(y0, r[1]);
+                    x1 = Math.Max(x1, r[0] + r[2]);
+                    y1 = Math.Max(y1, r[1] + r[3]);
+                }
+                state.Rects.Add(new[] { x0, y0, x1 - x0, y1 - y0 });
+            }
+            return state;
         }
 
-        private long Overlap(IntPtr hwnd, NativeMethods.RECT game)
+        // The part of a window above the game that lies over the game's client area, relative to its top-left.
+        private bool Overlap(IntPtr hwnd, NativeMethods.RECT game, out int[] rect)
         {
+            rect = null;
             if (!NativeMethods.IsWindowVisible(hwnd) || NativeMethods.IsIconic(hwnd))
             {
-                return 0;
+                return false;
             }
             // Cloaked: invisible UWP shells and windows on other virtual desktops.
             int cloaked;
             if (NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked != 0)
             {
-                return 0;
+                return false;
             }
 
             var ex = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE).ToInt64();
             // Click-through overlays of other tools (Blish HUD, Discord, ...) don't hide anything.
             if ((ex & NativeMethods.WS_EX_TRANSPARENT) != 0 && (ex & NativeMethods.WS_EX_LAYERED) != 0)
             {
-                return 0;
+                return false;
             }
             // Non-activating tool windows (overlay widgets, tooltips).
             if ((ex & NativeMethods.WS_EX_NOACTIVATE) != 0 && (ex & NativeMethods.WS_EX_TOOLWINDOW) != 0)
             {
-                return 0;
+                return false;
             }
 
             classBuffer.Clear();
@@ -138,7 +187,7 @@ namespace WebSocketServerNetFramework
             {
                 if (cls == shell)
                 {
-                    return 0;
+                    return false;
                 }
             }
 
@@ -146,7 +195,7 @@ namespace WebSocketServerNetFramework
             NativeMethods.GetWindowThreadProcessId(hwnd, out pid);
             if (IsOwnProcess(pid))
             {
-                return 0;
+                return false;
             }
 
             NativeMethods.RECT r;
@@ -154,12 +203,19 @@ namespace WebSocketServerNetFramework
             if (NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_EXTENDED_FRAME_BOUNDS, out r, Marshal.SizeOf(typeof(NativeMethods.RECT))) != 0
                 && !NativeMethods.GetWindowRect(hwnd, out r))
             {
-                return 0;
+                return false;
             }
 
-            var w = Math.Min(r.Right, game.Right) - Math.Max(r.Left, game.Left);
-            var h = Math.Min(r.Bottom, game.Bottom) - Math.Max(r.Top, game.Top);
-            return w > 0 && h > 0 ? (long)w * h : 0;
+            var left = Math.Max(r.Left, game.Left);
+            var top = Math.Max(r.Top, game.Top);
+            var w = Math.Min(r.Right, game.Right) - left;
+            var h = Math.Min(r.Bottom, game.Bottom) - top;
+            if (w < MinRectSize || h < MinRectSize)
+            {
+                return false;
+            }
+            rect = new[] { left - game.Left, top - game.Top, w, h };
+            return true;
         }
 
         private bool IsOwnProcess(uint pid)
