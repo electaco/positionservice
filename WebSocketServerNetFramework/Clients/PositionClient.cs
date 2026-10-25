@@ -15,6 +15,10 @@ namespace WebSocketServerNetFramework.Clients
         private static readonly TimeSpan LoadingScreenAfter = TimeSpan.FromMilliseconds(750);
         // Monotonic clock for Gw2Data.sampleTime.
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
+        // Window overlap is checked this often (not on every 1 ms poll), and a change must hold for
+        // CoverDebounce before it is sent, so a window dragged across the game doesn't flicker.
+        private static readonly TimeSpan CoverCheckEvery = TimeSpan.FromMilliseconds(100);
+        private static readonly TimeSpan CoverDebounce = TimeSpan.FromMilliseconds(150);
 
         public PositionClient(int socketId, WebSocket socket) : base(socketId, socket) {}
 
@@ -30,6 +34,12 @@ namespace WebSocketServerNetFramework.Clients
             var lastTickChange = DateTime.UtcNow;
             var tickTime = Clock.Elapsed.TotalMilliseconds;
             var loading = false;
+            var cover = new GameWindowCover();
+            // null until the first check, so the state is always sent once after connecting.
+            bool? sentCovered = null;
+            var pendingCovered = false;
+            var pendingSince = DateTime.UtcNow;
+            var lastCoverCheck = DateTime.MinValue;
             var cancellationToken = SendLoopTokenSource.Token;
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -59,6 +69,23 @@ namespace WebSocketServerNetFramework.Clients
                         {
                             loading = true;
                             await SendJson(new Command { Type = "loadingscreen", Data = loading.ToString() });
+                        }
+
+                        // Game covered by another program's window: {"Type":"gamecovered","Data":"True"|"False"}.
+                        if (now - lastCoverCheck >= CoverCheckEvery)
+                        {
+                            lastCoverCheck = now;
+                            var covered = cover.IsCovered(ndata.context.ProcessId);
+                            if (covered != pendingCovered)
+                            {
+                                pendingCovered = covered;
+                                pendingSince = now;
+                            }
+                            if (sentCovered != pendingCovered && (sentCovered == null || now - pendingSince >= CoverDebounce))
+                            {
+                                sentCovered = pendingCovered;
+                                await SendJson(new Command { Type = "gamecovered", Data = pendingCovered.ToString() });
+                            }
                         }
 
                         if (ndata.Equals(data))
