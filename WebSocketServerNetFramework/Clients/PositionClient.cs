@@ -33,7 +33,9 @@ namespace WebSocketServerNetFramework.Clients
                 {
                     while (webSocket.State == WebSocketState.Open)
                     {
-                        await Task.Delay(5);
+                        // ~1 ms with the 1 ms timer resolution set in Program.Main, so each game
+                        // frame is picked up within a millisecond or two of being written.
+                        await Task.Delay(1);
                         var ndata = TacoLib.TacoLib.GetGw2Data();
 
                         // Loading screen events: {"Type":"loadingscreen","Data":"True"|"False"}.
