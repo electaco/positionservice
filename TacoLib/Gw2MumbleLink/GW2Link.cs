@@ -41,6 +41,7 @@ namespace TacoLib.Gw2MumbleLib
         {
             return new Gw2Data
             {
+                uiTick = Read().UiTick,
                 coordinates = GetCoordinates(),
                 context = GetContext(),
                 identity = GetIdentity()
