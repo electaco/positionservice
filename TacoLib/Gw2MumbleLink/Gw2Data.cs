@@ -23,7 +23,11 @@ namespace TacoLib.Gw2MumbleLib
             var d = obj as Gw2Data;
             if (d != null)
             {
-                return d.coordinates.Equals(coordinates) && context.UiState == d.context.UiState;
+                // The map view too: panning or zooming the open map changes nothing else, and the
+                // overlay draws markers on the map from it.
+                return d.coordinates.Equals(coordinates) && context.UiState == d.context.UiState
+                    && context.MapCenterX == d.context.MapCenterX && context.MapCenterY == d.context.MapCenterY
+                    && context.MapScale == d.context.MapScale;
             }
             return false;
         }
