@@ -1,5 +1,6 @@
 ﻿using Serilog;
 using System;
+using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Threading.Tasks;
 using TacoLib.Gw2MumbleLib;
@@ -12,6 +13,8 @@ namespace WebSocketServerNetFramework.Clients
         // advances every game frame otherwise. When it stands still this long, a loading screen
         // has started.
         private static readonly TimeSpan LoadingScreenAfter = TimeSpan.FromMilliseconds(750);
+        // Monotonic clock for Gw2Data.sampleTime.
+        private static readonly Stopwatch Clock = Stopwatch.StartNew();
 
         public PositionClient(int socketId, WebSocket socket) : base(socketId, socket) {}
 
@@ -25,6 +28,7 @@ namespace WebSocketServerNetFramework.Clients
             Gw2Data data = null;
             uint lastTick = 0;
             var lastTickChange = DateTime.UtcNow;
+            var tickTime = Clock.Elapsed.TotalMilliseconds;
             var loading = false;
             var cancellationToken = SendLoopTokenSource.Token;
             while (!cancellationToken.IsCancellationRequested)
@@ -44,6 +48,7 @@ namespace WebSocketServerNetFramework.Clients
                         {
                             lastTick = ndata.uiTick;
                             lastTickChange = now;
+                            tickTime = Clock.Elapsed.TotalMilliseconds;
                             if (loading)
                             {
                                 loading = false;
@@ -62,6 +67,8 @@ namespace WebSocketServerNetFramework.Clients
                         }
 
                         data = ndata;
+                        // The game frame these coordinates belong to started when its tick was seen.
+                        ndata.sampleTime = Math.Round(tickTime, 2);
                         try
                         {
                             await SendJson(ndata);

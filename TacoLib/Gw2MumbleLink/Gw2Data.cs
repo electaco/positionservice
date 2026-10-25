@@ -10,6 +10,10 @@ namespace TacoLib.Gw2MumbleLib
         // stops during loading screens (GW2 doesn't update MumbleLink then). Not part of Equals:
         // the position client watches it and sends loading screen events instead.
         public uint uiTick { get; set; }
+        // When the service first saw this game frame (uiTick change), in milliseconds on the
+        // service's own monotonic clock. Lets the overlay time samples without the delays of
+        // sending them. Not part of Equals.
+        public double sampleTime { get; set; }
         public GW2Link.Coordinates coordinates { get; set; }
         public GW2Identity identity { get; set; }
         public GW2Context context { get; set; }
